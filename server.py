@@ -88,6 +88,7 @@ class Register(BaseModel):
 class Dish(BaseModel):
     name: str
     price: float
+    description: str = ""
 
 # ─── AUTH ─────────────────────────
 
@@ -96,13 +97,15 @@ async def register(r: Register):
     if await db.users.find_one({"email": r.email}):
         raise HTTPException(400, "Email exists")
 
+    is_vendor = r.role == "vendor"
+
     result = await db.users.insert_one({
         "email": r.email,
         "password_hash": hash_password(r.password),
         "name": r.name,
-        "business_name": r.name if r.role == "vendor" else None,
+        "business_name": r.name if is_vendor else None,
         "role": r.role,
-        "is_approved": True,
+        "is_approved": False if is_vendor else True,  # ✅ FIX
         "created_at": datetime.now(timezone.utc)
     })
 
@@ -114,26 +117,27 @@ async def register(r: Register):
             "id": uid,
             "email": r.email,
             "name": r.name,
-            "role": r.role
+            "role": r.role,
+            "is_approved": False if is_vendor else True
         }
     }
 
 @api_router.post("/auth/login")
 async def login(r: Login):
     user = await db.users.find_one({"email": r.email})
+
     if not user or not verify_password(r.password, user["password_hash"]):
         raise HTTPException(401, "Invalid login")
+
+    # ✅ FIX: vendor approval check
+    if user["role"] == "vendor" and not user.get("is_approved", False):
+        raise HTTPException(403, "Vendor not approved")
 
     uid = str(user["_id"])
 
     return {
         "token": create_token(uid, user["email"], user["role"]),
-        "user": {
-            "id": uid,
-            "email": user["email"],
-            "name": user["name"],
-            "role": user["role"]
-        }
+        "user": serialize(user)
     }
 
 @api_router.get("/auth/me")
@@ -144,7 +148,11 @@ async def me(req: Request):
 
 @api_router.get("/vendors")
 async def get_vendors():
-    vendors = await db.users.find({"role": "vendor"}).to_list(100)
+    vendors = await db.users.find({
+        "role": "vendor",
+        "is_approved": True   # ✅ FIX
+    }).to_list(100)
+
     return [serialize(v) for v in vendors]
 
 @api_router.get("/admin/vendors")
@@ -184,6 +192,7 @@ async def add_dish(req: Request, d: Dish):
         "vendor_id": user["id"],
         "name": d.name,
         "price": d.price,
+        "description": d.description,
         "created_at": datetime.now(timezone.utc)
     })
 
@@ -194,6 +203,7 @@ async def get_menu(vendor_id: str):
     items = await db.menus.find({"vendor_id": vendor_id}).to_list(100)
     return [serialize(i) for i in items]
 
+# ✅ IMPORTANT FIX (THIS WAS BREAKING YOUR APP)
 @api_router.get("/vendor/menus")
 async def get_my_menus(req: Request):
     user = await get_user(req)
@@ -220,10 +230,10 @@ async def dashboard(req: Request):
         }
 
     elif user["role"] == "vendor":
-        menus = await db.menus.find({"vendor_id": user["id"]}).to_list(100)
+        count = await db.menus.count_documents({"vendor_id": user["id"]})
 
         return {
-            "menu_count": len(menus)
+            "menu_count": count
         }
 
     else:
