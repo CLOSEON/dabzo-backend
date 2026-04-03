@@ -22,7 +22,7 @@ from bson import ObjectId
 
 mongo_url = os.environ.get("MONGO_URL")
 if not mongo_url:
-raise Exception("MONGO_URL not found")
+    raise Exception("MONGO_URL not found")
 
 client = AsyncIOMotorClient(
 mongo_url,
