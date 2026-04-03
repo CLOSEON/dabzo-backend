@@ -5,7 +5,7 @@ import logging
 
 # Load env
 
-ROOT_DIR = Path(**file**).parent
+ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request
