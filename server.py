@@ -94,7 +94,8 @@ async def register(r: Register):
         "email": r.email,
         "password_hash": hash_password(r.password),
         "name": r.name,
-        "role": r.role
+        "role": r.role,
+        "created_at": datetime.now(timezone.utc)
     })
 
     uid = str(result.inserted_id)
@@ -121,7 +122,7 @@ async def login(r: Login):
         "token": create_token(uid, r.email, user["role"]),
         "user": {
             "id": uid,
-            "email": r.email,
+            "email": user["email"],
             "name": user["name"],
             "role": user["role"]
         }
@@ -131,12 +132,21 @@ async def login(r: Login):
 async def me(req: Request):
     return await get_user(req)
 
-# ─── TEST ROUTE ─────────────────────────────────────────
+# ─── VENDORS (FIXED) ─────────────────────────────────────────
 
 @api_router.get("/vendors")
 async def vendors():
-    v = await db.vendors.find().to_list(100)
+    v = await db.users.find({"role": "vendor"}).to_list(100)
     return [serialize(x) for x in v]
+
+# ─── FUTURE READY ENDPOINT (OPTIONAL) ───────────────────────
+
+@api_router.get("/vendor/profile")
+async def vendor_profile(req: Request):
+    user = await get_user(req)
+    if user["role"] != "vendor":
+        raise HTTPException(403, "Not a vendor")
+    return user
 
 # ─── HEALTH ─────────────────────────────────────────
 
@@ -162,14 +172,6 @@ app.add_middleware(
 async def startup():
     logger.info("Starting Dabzo API...")
     await db.users.create_index("email", unique=True)
-
-    try:
-        creds_path = Path("./memory/test.txt")
-        creds_path.parent.mkdir(parents=True, exist_ok=True)
-        creds_path.write_text("Backend running")
-    except Exception as e:
-        logger.warning(f"File write skipped: {e}")
-
     logger.info("Dabzo API ready!")
 
 @app.on_event("shutdown")
