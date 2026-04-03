@@ -16,7 +16,7 @@ import bcrypt
 import jwt
 from bson import ObjectId
 
-# ─── MongoDB CONNECTION ─────────────────────────────
+# ─── DB SETUP ─────────────────────────────────────────
 
 mongo_url = os.environ.get("MONGO_URL")
 if not mongo_url:
@@ -39,7 +39,7 @@ api_router = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Helpers ─────────────────────────────────────────
+# ─── HELPERS ─────────────────────────────────────────
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -57,6 +57,8 @@ def create_token(uid: str, email: str, role: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def serialize(doc):
+    if not doc:
+        return None
     doc = dict(doc)
     doc["id"] = str(doc.pop("_id"))
     doc.pop("password_hash", None)
@@ -64,9 +66,14 @@ def serialize(doc):
 
 async def get_user(req: Request):
     token = req.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        raise HTTPException(401, "Missing token")
+
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        if not user:
+            raise Exception("User not found")
         return serialize(user)
     except Exception:
         raise HTTPException(401, "Invalid token")
@@ -119,7 +126,7 @@ async def login(r: Login):
     uid = str(user["_id"])
 
     return {
-        "token": create_token(uid, r.email, user["role"]),
+        "token": create_token(uid, user["email"], user["role"]),
         "user": {
             "id": uid,
             "email": user["email"],
@@ -132,14 +139,14 @@ async def login(r: Login):
 async def me(req: Request):
     return await get_user(req)
 
-# ─── VENDORS (FIXED) ─────────────────────────────────────────
+# ─── USERS / VENDORS ─────────────────────────────────────────
 
 @api_router.get("/vendors")
-async def vendors():
-    v = await db.users.find({"role": "vendor"}).to_list(100)
-    return [serialize(x) for x in v]
+async def get_vendors():
+    vendors = await db.users.find({"role": "vendor"}).to_list(100)
+    return [serialize(v) for v in vendors]
 
-# ─── FUTURE READY ENDPOINT (OPTIONAL) ───────────────────────
+# ─── VENDOR PROFILE ─────────────────────────────────────────
 
 @api_router.get("/vendor/profile")
 async def vendor_profile(req: Request):
@@ -147,6 +154,40 @@ async def vendor_profile(req: Request):
     if user["role"] != "vendor":
         raise HTTPException(403, "Not a vendor")
     return user
+
+# ─── SAMPLE MENU SYSTEM (FIXED) ─────────────────────────
+
+class MenuCreate(BaseModel):
+    name: str
+    price: float
+    description: str
+
+@api_router.post("/vendor/menus")
+async def create_menu(req: Request, m: MenuCreate):
+    user = await get_user(req)
+
+    if user["role"] != "vendor":
+        raise HTTPException(403, "Not a vendor")
+
+    await db.menus.insert_one({
+        "vendor_id": user["id"],
+        "name": m.name,
+        "price": m.price,
+        "description": m.description,
+        "created_at": datetime.now(timezone.utc)
+    })
+
+    return {"message": "Menu added successfully"}
+
+@api_router.get("/vendor/menus")
+async def get_my_menus(req: Request):
+    user = await get_user(req)
+
+    if user["role"] != "vendor":
+        raise HTTPException(403, "Not a vendor")
+
+    menus = await db.menus.find({"vendor_id": user["id"]}).to_list(100)
+    return [serialize(m) for m in menus]
 
 # ─── HEALTH ─────────────────────────────────────────
 
