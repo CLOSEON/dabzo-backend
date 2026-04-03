@@ -238,6 +238,53 @@ async def get_my_menus(req: Request):
 
     return [serialize(m) for m in menus]
 
+# ─── SUBSCRIPTIONS ─────────────────────────
+
+@api_router.post("/subscriptions")
+async def create_subscription(req: Request, body: dict):
+    user = await get_user(req)
+
+    if user["role"] != "user":
+        raise HTTPException(403, "Only users can subscribe")
+
+    vendor_id = body.get("vendor_id")
+    meal_type = body.get("meal_type")
+
+    if not vendor_id or not meal_type:
+        raise HTTPException(400, "Missing fields")
+
+    # check vendor exists
+    try:
+        vendor = await db.users.find_one({
+            "_id": ObjectId(vendor_id),
+            "role": "vendor"
+        })
+    except:
+        raise HTTPException(400, "Invalid vendor id")
+
+    if not vendor:
+        raise HTTPException(404, "Vendor not found")
+
+    # prevent duplicate subscription
+    existing = await db.subscriptions.find_one({
+        "user_id": user["id"],
+        "vendor_id": vendor_id,
+        "status": "active"
+    })
+
+    if existing:
+        raise HTTPException(400, "Already subscribed")
+
+    sub = await db.subscriptions.insert_one({
+        "user_id": user["id"],
+        "vendor_id": vendor_id,
+        "meal_type": meal_type,
+        "status": "active",
+        "created_at": datetime.now(timezone.utc)
+    })
+
+    return {"id": str(sub.inserted_id)}
+
 # ─── DASHBOARD ─────────────────────────
 
 @api_router.get("/dashboard")
